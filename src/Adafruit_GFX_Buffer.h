@@ -243,6 +243,9 @@ bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
         }
         return false;
     }
+    else if(gfxDMAActive){
+        if(!gfxDMAChannel.complete()) return false;
+    }
 #endif
   uint8_t orientation = getRotation();
   switch(orientation){

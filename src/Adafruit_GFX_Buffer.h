@@ -21,26 +21,23 @@
  */
 #include <Adafruit_GFX.h>
 
+#if defined(__IMXRT1062__)
+#include <DMAChannel.h>
+#include <SPI.h>
+#define ADAFRUIT_GFX_DMA_ENABLE (1)
+typedef void (*gfxDMA_t)(void);
+#else
+#define ADAFRUIT_GFX_DMA_ENABLE (0)
+#endif
+
 template<typename display_t>
 class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
 {
   public:
-    Adafruit_GFX_Buffer(uint16_t width, uint16_t height, display_t display) : display_t(display), GFXcanvas16(width, height){ }
+    Adafruit_GFX_Buffer(uint16_t width, uint16_t height, display_t display) : display_t(display), GFXcanvas16(width, height){}
     ~Adafruit_GFX_Buffer() { }
     
-    void display(){  //Draw canvas to display
-      uint8_t orientation = getRotation();
-      switch(orientation){
-        case 0:
-        case 2:
-          this->display_t::drawRGBBitmap(0,0,this->GFXcanvas16::getBuffer(), this->GFXcanvas16::width(), this->GFXcanvas16::height());
-          break;
-        case 1:
-        case 3:
-          this->display_t::drawRGBBitmap(0,0,this->GFXcanvas16::getBuffer(), this->GFXcanvas16::height(), this->GFXcanvas16::width());
-          break;
-      }
-    }
+    bool display();
 
 /*The following are overrides to make sure the canvas functions are used and not the display functions*/
     using GFXcanvas16::drawPixel;
@@ -168,10 +165,190 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
     }
 /*End function overrides*/
     
+#if ADAFRUIT_GFX_DMA_ENABLE
+  public:
+    bool initDMA(gfxDMA_t DMAFunction);
+#define gfxDMAn(a)  static void DMA##a(){                       \
+                        if(DMAnObject[(a)]){                    \
+                            DMAnObject[(a)]->isrDMACom();       \
+                        }                                       \
+                        else gfxDMAChannel.clearInterrupt();    \
+                    }
+    gfxDMAn(0);
+    gfxDMAn(1);
+    gfxDMAn(2);
+    gfxDMAn(3);
+    gfxDMAn(4);
+    gfxDMAn(5);
+    gfxDMAn(6);
+    gfxDMAn(7);
+    gfxDMAn(8);
+    gfxDMAn(9);
+    gfxDMAn(10);
+    gfxDMAn(11);
+    static gfxDMA_t DMAn[];
   private:
+    static Adafruit_GFX_Buffer<display_t>* DMAnObject[sizeof(DMAn)/4];
+    void isrDMACom();
+    DMASetting gfxDMASetting;
+    static DMAChannel gfxDMAChannel;
+    gfxDMA_t gfxDMAFunction;
+    static bool gfxDMAActive;
     
+#if defined(__IMXRT1062__)
+    SPIClass* _spi = nullptr;
+    IMXRT_LPSPI_t* _spi_struct = nullptr;
+    uint32_t _spi_struct_TCR;
+    SPIClass::SPI_Hardware_t* _spi_hardware = nullptr;
+#endif
+#endif
 };
 
 uint16_t color565(uint8_t red, uint8_t green, uint8_t blue) {
-  return ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3);
+    return ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3);
 }
+
+template<typename display_t>
+bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
+#if ADAFRUIT_GFX_DMA_ENABLE
+    if(gfxDMAActive && gfxDMAFunction && _spi){
+        if(gfxDMAChannel.complete()){
+            gfxDMAChannel.clearComplete();
+            while (_spi_struct->FSR & 0x1f);  // wait until this one is complete
+            while (_spi_struct->SR & LPSPI_SR_MBF);  // wait until this one is complete
+            gfxDMAChannel = gfxDMASetting;
+            gfxDMAChannel.triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
+            gfxDMAChannel.attachInterrupt(gfxDMAFunction);
+            
+            this->display_t::startWrite();
+            uint8_t orientation = getRotation();
+            switch(orientation){
+              case 0:
+              case 2:
+                this->display_t::setAddrWindow(0, 0, this->GFXcanvas16::width(), this->GFXcanvas16::height());
+                break;
+              case 1:
+              case 3:
+                this->display_t::setAddrWindow(0, 0, this->GFXcanvas16::height(), this->GFXcanvas16::width());
+                break;
+            }
+            _spi_struct_TCR = _spi_struct->TCR;
+            _spi_struct->TCR = (_spi_struct->TCR & 0xfffff000) | LPSPI_TCR_FRAMESZ(31) | LPSPI_TCR_RXMSK | LPSPI_TCR_BYSW;
+            _spi_struct->DER = LPSPI_DER_TDDE;
+            _spi_struct->SR = 0x3f00;
+            byteSwap();
+            if ((uint32_t)getBuffer() >= 0x20200000u)  arm_dcache_flush((void*)getBuffer(), width() * height() * 2);
+            gfxDMAChannel.enable();
+            return true;
+        }
+        return false;
+    }
+#endif
+  uint8_t orientation = getRotation();
+  switch(orientation){
+    case 0:
+    case 2:
+      this->display_t::drawRGBBitmap(0,0,this->GFXcanvas16::getBuffer(), this->GFXcanvas16::width(), this->GFXcanvas16::height());
+      break;
+    case 1:
+    case 3:
+      this->display_t::drawRGBBitmap(0,0,this->GFXcanvas16::getBuffer(), this->GFXcanvas16::height(), this->GFXcanvas16::width());
+      break;
+  }
+    return true;
+}
+
+#if ADAFRUIT_GFX_DMA_ENABLE
+template<typename display_t>
+DMAChannel Adafruit_GFX_Buffer<display_t>::gfxDMAChannel;
+
+template<typename display_t>
+Adafruit_GFX_Buffer<display_t>* Adafruit_GFX_Buffer<display_t>::DMAnObject[sizeof(DMAn)/4];
+
+template<typename display_t>
+gfxDMA_t Adafruit_GFX_Buffer<display_t>::DMAn[] = {&DMA0, &DMA1, &DMA2, &DMA3, &DMA4, &DMA5, &DMA6, &DMA7, &DMA8, &DMA9, &DMA10, &DMA11};
+
+template<typename display_t>
+bool Adafruit_GFX_Buffer<display_t>::gfxDMAActive = false;
+
+template<typename display_t>
+bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
+    if(!DMAFunction) return false;
+    for(uint8_t i = 0; i < sizeof(DMAn) / 4; i++){
+        if(DMAFunction == DMAn[i]) {
+            DMAnObject[i] = this;
+            gfxDMAFunction = DMAFunction;
+            break;
+        }
+        else if(i == (sizeof(DMAn) / 4) - 1) return false;
+    }
+#if defined(__IMXRT1062__)
+    _spi = display_t::hwspi._spi;
+    
+    if(_spi == &SPI){
+        _spi_struct = &IMXRT_LPSPI4_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi4_hardware;
+    }
+    else if(_spi == &SPI1){
+        _spi_struct = &IMXRT_LPSPI3_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi3_hardware;
+    }
+    else if(_spi == &SPI2){
+        _spi_struct = &IMXRT_LPSPI1_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi1_hardware;
+    }
+    else return false;
+    
+    gfxDMASetting.sourceBuffer((uint32_t*)getBuffer(), width() * height() / 2);
+    gfxDMASetting.destination(_spi_struct->TDR);
+    gfxDMASetting.transferSize(4);
+    gfxDMASetting.transferCount(width() * height() / 2);
+    gfxDMASetting.interruptAtCompletion();
+    gfxDMASetting.disableOnCompletion();
+    if(!gfxDMAActive){
+
+        gfxDMAChannel = gfxDMASetting;
+        
+        gfxDMAChannel.triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
+        gfxDMAChannel.attachInterrupt(gfxDMAFunction);
+        
+        this->display_t::startWrite();
+        uint8_t orientation = getRotation();
+        switch(orientation){
+          case 0:
+          case 2:
+            this->display_t::setAddrWindow(0, 0, this->GFXcanvas16::width(), this->GFXcanvas16::height());
+            break;
+          case 1:
+          case 3:
+            this->display_t::setAddrWindow(0, 0, this->GFXcanvas16::height(), this->GFXcanvas16::width());
+            break;
+        }
+        //  _spi_fcr_save = _pimxrt_spi->FCR;    // remember the FCR
+        //    _pimxrt_spi->FCR = 0;    // clear water marks...
+        _spi_struct_TCR = _spi_struct->TCR;
+        _spi_struct->TCR = (_spi_struct->TCR & 0xfffff000) | LPSPI_TCR_FRAMESZ(31) | LPSPI_TCR_RXMSK | LPSPI_TCR_BYSW;
+        _spi_struct->DER = LPSPI_DER_TDDE;
+        _spi_struct->SR = 0x3f00;
+        if ((uint32_t)getBuffer() >= 0x20200000u)  arm_dcache_flush((void*)getBuffer(), width() * height() * 2);
+        gfxDMAChannel.enable();
+        
+        gfxDMAActive = true;
+        return true;
+    }
+    else return true;
+#elif
+    return false;
+#endif
+}
+
+template<typename display_t>
+void Adafruit_GFX_Buffer<display_t>::isrDMACom(){
+    gfxDMAChannel.clearInterrupt();
+    _spi_struct->TCR = _spi_struct_TCR;
+    this->display_t::endWrite();
+#if defined(__IMXRT1062__) // Teensy 4.0
+  asm("DSB");
+#endif
+}
+#endif

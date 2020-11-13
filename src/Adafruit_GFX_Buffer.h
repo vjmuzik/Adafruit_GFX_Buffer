@@ -19,6 +19,8 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#ifndef _ADAFRUIT_GFX_BUFFER_H
+#define _ADAFRUIT_GFX_BUFFER_H
 #include <Adafruit_GFX.h>
 
 #if defined(__IMXRT1062__)
@@ -34,7 +36,26 @@ template<typename display_t>
 class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
 {
   public:
-    Adafruit_GFX_Buffer(uint16_t width, uint16_t height, display_t display) : display_t(display), GFXcanvas16(width, height){}
+    Adafruit_GFX_Buffer(uint16_t width, uint16_t height, display_t display) : display_t(display), GFXcanvas16(width, height){
+#if ADAFRUIT_GFX_DMA_ENABLE
+#if defined(__IMXRT1062__)
+    _spi = display_t::hwspi._spi;
+    
+    if(_spi == &SPI){
+        _spi_struct = &IMXRT_LPSPI4_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi4_hardware;
+    }
+    else if(_spi == &SPI1){
+        _spi_struct = &IMXRT_LPSPI3_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi3_hardware;
+    }
+    else if(_spi == &SPI2){
+        _spi_struct = &IMXRT_LPSPI1_S;
+        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi1_hardware;
+    }
+#endif //__IMXRT1062__
+#endif //ADAFRUIT_GFX_DMA_ENABLE
+    }
     ~Adafruit_GFX_Buffer() { }
     
     bool display();
@@ -187,6 +208,14 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
     gfxDMAn(10);
     gfxDMAn(11);
     static gfxDMA_t DMAn[];
+    void changeSPIClock(uint8_t clock, uint8_t divisor){
+        if(!_spi_hardware) return;
+        if(!divisor) divisor = 1;
+        _spi_hardware->clock_gate_register &= ~_spi_hardware->clock_gate_mask;
+        CCM_CBCMR = (CCM_CBCMR & ~(CCM_CBCMR_LPSPI_PODF_MASK | CCM_CBCMR_LPSPI_CLK_SEL_MASK)) |
+            CCM_CBCMR_LPSPI_PODF(divisor & 7) | CCM_CBCMR_LPSPI_CLK_SEL(clock & 3);
+        _spi_hardware->clock_gate_register |= _spi_hardware->clock_gate_mask;
+    }
   private:
     static Adafruit_GFX_Buffer<display_t>* DMAnObject[sizeof(DMAn)/4];
     void isrDMACom();
@@ -204,7 +233,7 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
 #endif
 };
 
-uint16_t color565(uint8_t red, uint8_t green, uint8_t blue) {
+inline uint16_t color565(uint8_t red, uint8_t green, uint8_t blue) {
     return ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3);
 }
 
@@ -214,8 +243,6 @@ bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
     if(gfxDMAActive && gfxDMAFunction && _spi){
         if(gfxDMAChannel.complete()){
             gfxDMAChannel.clearComplete();
-            while (_spi_struct->FSR & 0x1f);  // wait until this one is complete
-            while (_spi_struct->SR & LPSPI_SR_MBF);  // wait until this one is complete
             gfxDMAChannel = gfxDMASetting;
             gfxDMAChannel.triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
             gfxDMAChannel.attachInterrupt(gfxDMAFunction);
@@ -286,21 +313,7 @@ bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
         else if(i == (sizeof(DMAn) / 4) - 1) return false;
     }
 #if defined(__IMXRT1062__)
-    _spi = display_t::hwspi._spi;
-    
-    if(_spi == &SPI){
-        _spi_struct = &IMXRT_LPSPI4_S;
-        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi4_hardware;
-    }
-    else if(_spi == &SPI1){
-        _spi_struct = &IMXRT_LPSPI3_S;
-        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi3_hardware;
-    }
-    else if(_spi == &SPI2){
-        _spi_struct = &IMXRT_LPSPI1_S;
-        _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi1_hardware;
-    }
-    else return false;
+    if(!_spi) return false;
     
     gfxDMASetting.sourceBuffer((uint32_t*)getBuffer(), width() * height() / 2);
     gfxDMASetting.destination(_spi_struct->TDR);
@@ -349,9 +362,12 @@ template<typename display_t>
 void Adafruit_GFX_Buffer<display_t>::isrDMACom(){
     gfxDMAChannel.clearInterrupt();
     _spi_struct->TCR = _spi_struct_TCR;
+    while (_spi_struct->FSR & 0x1f);  // wait until this one is complete
+    while (_spi_struct->SR & LPSPI_SR_MBF);  // wait until this one is complete
     this->display_t::endWrite();
 #if defined(__IMXRT1062__) // Teensy 4.0
   asm("DSB");
 #endif
 }
 #endif
+#endif //_ADAFRUIT_GFX_BUFFER_H

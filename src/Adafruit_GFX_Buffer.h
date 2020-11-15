@@ -44,14 +44,20 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
     if(_spi == &SPI){
         _spi_struct = &IMXRT_LPSPI4_S;
         _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi4_hardware;
+        gfxDMAChannel = &gfxDMAChannel0;
+        gfxDMAActive = &gfxDMAActive0;
     }
     else if(_spi == &SPI1){
         _spi_struct = &IMXRT_LPSPI3_S;
         _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi3_hardware;
+        gfxDMAChannel = &gfxDMAChannel1;
+        gfxDMAActive = &gfxDMAActive1;
     }
     else if(_spi == &SPI2){
         _spi_struct = &IMXRT_LPSPI1_S;
         _spi_hardware = (SPIClass::SPI_Hardware_t*)&_spi->spiclass_lpspi1_hardware;
+        gfxDMAChannel = &gfxDMAChannel2;
+        gfxDMAActive = &gfxDMAActive2;
     }
 #endif //__IMXRT1062__
 #endif //ADAFRUIT_GFX_DMA_ENABLE
@@ -193,8 +199,12 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
                         if(DMAnObject[(a)]){                    \
                             DMAnObject[(a)]->isrDMACom();       \
                         }                                       \
-                        else gfxDMAChannel.clearInterrupt();    \
-                    }
+                        else{                                   \
+                            gfxDMAChannel0.clearInterrupt();    \
+                            gfxDMAChannel1.clearInterrupt();    \
+                            gfxDMAChannel2.clearInterrupt();    \
+                        }                                       \
+                    } /*Unelegant to clear all DMA objects, but it should never happen*/
     gfxDMAn(0);
     gfxDMAn(1);
     gfxDMAn(2);
@@ -209,20 +219,29 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
     gfxDMAn(11);
     static gfxDMA_t DMAn[];
     void changeSPIClock(uint8_t clock, uint8_t divisor){
+#if defined(__IMXRT1062__)
         if(!_spi_hardware) return;
         if(!divisor) divisor = 1;
         _spi_hardware->clock_gate_register &= ~_spi_hardware->clock_gate_mask;
         CCM_CBCMR = (CCM_CBCMR & ~(CCM_CBCMR_LPSPI_PODF_MASK | CCM_CBCMR_LPSPI_CLK_SEL_MASK)) |
             CCM_CBCMR_LPSPI_PODF(divisor & 7) | CCM_CBCMR_LPSPI_CLK_SEL(clock & 3);
         _spi_hardware->clock_gate_register |= _spi_hardware->clock_gate_mask;
+#endif
     }
+    bool displayComplete(){return gfxDMAChannel->complete();}
   private:
     static Adafruit_GFX_Buffer<display_t>* DMAnObject[sizeof(DMAn)/4];
     void isrDMACom();
     DMASetting gfxDMASetting;
-    static DMAChannel gfxDMAChannel;
+    DMAChannel* gfxDMAChannel;
+    static DMAChannel gfxDMAChannel0;
+    static DMAChannel gfxDMAChannel1;
+    static DMAChannel gfxDMAChannel2;
     gfxDMA_t gfxDMAFunction;
-    static bool gfxDMAActive;
+    bool* gfxDMAActive;
+    static bool gfxDMAActive0;
+    static bool gfxDMAActive1;
+    static bool gfxDMAActive2;
     
 #if defined(__IMXRT1062__)
     SPIClass* _spi = nullptr;
@@ -240,12 +259,12 @@ inline uint16_t color565(uint8_t red, uint8_t green, uint8_t blue) {
 template<typename display_t>
 bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
 #if ADAFRUIT_GFX_DMA_ENABLE
-    if(gfxDMAActive && gfxDMAFunction && _spi){
-        if(gfxDMAChannel.complete()){
-            gfxDMAChannel.clearComplete();
-            gfxDMAChannel = gfxDMASetting;
-            gfxDMAChannel.triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
-            gfxDMAChannel.attachInterrupt(gfxDMAFunction);
+    if(*gfxDMAActive && gfxDMAFunction && _spi){
+        if(gfxDMAChannel->complete()){
+            gfxDMAChannel->clearComplete();
+            *gfxDMAChannel = gfxDMASetting;
+            gfxDMAChannel->triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
+            gfxDMAChannel->attachInterrupt(gfxDMAFunction);
             
             this->display_t::startWrite();
             uint8_t orientation = getRotation();
@@ -265,13 +284,13 @@ bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
             _spi_struct->SR = 0x3f00;
             byteSwap();
             if ((uint32_t)getBuffer() >= 0x20200000u)  arm_dcache_flush((void*)getBuffer(), width() * height() * 2);
-            gfxDMAChannel.enable();
+            gfxDMAChannel->enable();
             return true;
         }
         return false;
     }
-    else if(gfxDMAActive){
-        if(!gfxDMAChannel.complete()) return false;
+    else if(*gfxDMAActive){
+        if(!gfxDMAChannel->complete()) return false;
     }
 #endif
   uint8_t orientation = getRotation();
@@ -290,7 +309,13 @@ bool Adafruit_GFX_Buffer<display_t>::display(){  //Draw canvas to display
 
 #if ADAFRUIT_GFX_DMA_ENABLE
 template<typename display_t>
-DMAChannel Adafruit_GFX_Buffer<display_t>::gfxDMAChannel;
+DMAChannel Adafruit_GFX_Buffer<display_t>::gfxDMAChannel0;
+
+template<typename display_t>
+DMAChannel Adafruit_GFX_Buffer<display_t>::gfxDMAChannel1;
+
+template<typename display_t>
+DMAChannel Adafruit_GFX_Buffer<display_t>::gfxDMAChannel2;
 
 template<typename display_t>
 Adafruit_GFX_Buffer<display_t>* Adafruit_GFX_Buffer<display_t>::DMAnObject[sizeof(DMAn)/4];
@@ -299,7 +324,13 @@ template<typename display_t>
 gfxDMA_t Adafruit_GFX_Buffer<display_t>::DMAn[] = {&DMA0, &DMA1, &DMA2, &DMA3, &DMA4, &DMA5, &DMA6, &DMA7, &DMA8, &DMA9, &DMA10, &DMA11};
 
 template<typename display_t>
-bool Adafruit_GFX_Buffer<display_t>::gfxDMAActive = false;
+bool Adafruit_GFX_Buffer<display_t>::gfxDMAActive0 = false;
+
+template<typename display_t>
+bool Adafruit_GFX_Buffer<display_t>::gfxDMAActive1 = false;
+
+template<typename display_t>
+bool Adafruit_GFX_Buffer<display_t>::gfxDMAActive2 = false;
 
 template<typename display_t>
 bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
@@ -321,12 +352,12 @@ bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
     gfxDMASetting.transferCount(width() * height() / 2);
     gfxDMASetting.interruptAtCompletion();
     gfxDMASetting.disableOnCompletion();
-    if(!gfxDMAActive){
+    if(!*gfxDMAActive){
 
-        gfxDMAChannel = gfxDMASetting;
+        *gfxDMAChannel = gfxDMASetting;
         
-        gfxDMAChannel.triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
-        gfxDMAChannel.attachInterrupt(gfxDMAFunction);
+        gfxDMAChannel->triggerAtHardwareEvent(_spi_hardware->tx_dma_channel);
+        gfxDMAChannel->attachInterrupt(gfxDMAFunction);
         
         this->display_t::startWrite();
         uint8_t orientation = getRotation();
@@ -347,9 +378,9 @@ bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
         _spi_struct->DER = LPSPI_DER_TDDE;
         _spi_struct->SR = 0x3f00;
         if ((uint32_t)getBuffer() >= 0x20200000u)  arm_dcache_flush((void*)getBuffer(), width() * height() * 2);
-        gfxDMAChannel.enable();
+        gfxDMAChannel->enable();
         
-        gfxDMAActive = true;
+        *gfxDMAActive = true;
         return true;
     }
     else return true;
@@ -360,7 +391,7 @@ bool Adafruit_GFX_Buffer<display_t>::initDMA(gfxDMA_t DMAFunction){
 
 template<typename display_t>
 void Adafruit_GFX_Buffer<display_t>::isrDMACom(){
-    gfxDMAChannel.clearInterrupt();
+    gfxDMAChannel->clearInterrupt();
     _spi_struct->TCR = _spi_struct_TCR;
     while (_spi_struct->FSR & 0x1f);  // wait until this one is complete
     while (_spi_struct->SR & LPSPI_SR_MBF);  // wait until this one is complete

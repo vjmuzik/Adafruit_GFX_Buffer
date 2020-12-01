@@ -74,15 +74,15 @@ class Adafruit_GFX_Buffer : public GFXcanvas16, virtual public display_t
     using GFXcanvas16::drawFastHLine;
     using GFXcanvas16::getPixel;
     using GFXcanvas16::getBuffer;
-    using GFXcanvas16::fillRect;
-    using GFXcanvas16::drawLine;
-    using GFXcanvas16::drawRect;
-
+    
+    void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color){this->GFXcanvas16::fillRect(x, y, w, h, color);}
+    void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color){this->GFXcanvas16::drawRect(x, y, w, h, color);}
     void writePixel(int16_t x, int16_t y, uint16_t color){this->GFXcanvas16::writePixel(x, y, color);}
     void writeFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color){this->GFXcanvas16::writeFillRect(x, y, w, h, color);}
     void writeFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color){this->GFXcanvas16::writeFastVLine(x, y, h, color);}
     void writeFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color){this->GFXcanvas16::writeFastHLine(x, y, w, color);}
     void writeLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color){this->GFXcanvas16::writeLine(x0, y0, x1, y1, color);}
+    void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color){this->GFXcanvas16::drawLine(x0, y0, x1, y1, color);}
     void setRotation(uint8_t r){this->display_t::setRotation(0); this->GFXcanvas16::setRotation(r);}
     void invertDisplay(bool i){this->display_t::invertDisplay(i);}
     void drawCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color){this->GFXcanvas16::drawCircle(x0, y0, r, color);}
